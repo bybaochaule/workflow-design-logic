@@ -1,0 +1,317 @@
+{
+  "workflow_title": "Example Agent Workflow Logic",
+  "version": "1.0.0",
+  "objective": "Design a safe, explicit workflow from user request to final response.",
+  "entry_state": "S1_intake",
+  "assumptions": [
+    "Replace this example with the user's actual goal and constraints."
+  ],
+  "states": [
+    {
+      "id": "S1_intake",
+      "type": "sequence",
+      "name": "Receive and parse request",
+      "entry_conditions": [
+        "User asks for workflow logic or branching behavior"
+      ],
+      "actions": [
+        "Identify workflow goal, trigger, audience, constraints, and requested output format"
+      ],
+      "validation": [
+        "Core objective is present or can be safely assumed"
+      ],
+      "transitions": [
+        {
+          "condition": "Request is unsafe, deceptive, or asks to bypass policy",
+          "priority": 1,
+          "next": "F3_safety_redirect"
+        },
+        {
+          "condition": "Core objective is clear",
+          "priority": 2,
+          "next": "S2_define_success_path"
+        },
+        {
+          "condition": "Core objective is missing and cannot be assumed",
+          "priority": 3,
+          "next": "F1_missing_info"
+        }
+      ],
+      "fallback": "F2_no_match"
+    },
+    {
+      "id": "S2_define_success_path",
+      "type": "sequence",
+      "name": "Define primary success path",
+      "entry_conditions": [
+        "Workflow objective is available"
+      ],
+      "actions": [
+        "Write the ideal ordered sequence from trigger to terminal success",
+        "Assign stable IDs to each step"
+      ],
+      "validation": [
+        "Primary sequence has a terminal success state"
+      ],
+      "transitions": [
+        {
+          "condition": "Primary path is complete",
+          "priority": 1,
+          "next": "S3_add_decisions"
+        },
+        {
+          "condition": "Primary path has gaps",
+          "priority": 2,
+          "next": "F1_missing_info"
+        }
+      ],
+      "fallback": "F2_no_match"
+    },
+    {
+      "id": "S3_add_decisions",
+      "type": "decision",
+      "name": "Add decision points and branches",
+      "entry_conditions": [
+        "Primary sequence exists"
+      ],
+      "actions": [
+        "Identify every point where the agent must choose between paths",
+        "Write IF/THEN/ELSE conditions with priority",
+        "Add fallback/default behavior for unmatched cases"
+      ],
+      "validation": [
+        "Every decision has a default or fallback"
+      ],
+      "transitions": [
+        {
+          "condition": "All decisions have branches and fallbacks",
+          "priority": 1,
+          "next": "S4_add_error_paths"
+        },
+        {
+          "condition": "A decision lacks a fallback",
+          "priority": 2,
+          "next": "F2_no_match"
+        }
+      ],
+      "fallback": "F2_no_match"
+    },
+    {
+      "id": "S4_add_error_paths",
+      "type": "sequence",
+      "name": "Add fallback and error handling",
+      "entry_conditions": [
+        "Decision branches are drafted"
+      ],
+      "actions": [
+        "Cover missing input, ambiguity, invalid input, tool failure, unavailable data, timeout, safety conflict, and no matching branch",
+        "Define retry limits, disclosure rules, and stop conditions"
+      ],
+      "validation": [
+        "Each known failure mode has a recovery action or terminal state"
+      ],
+      "transitions": [
+        {
+          "condition": "Error paths are complete",
+          "priority": 1,
+          "next": "S5_validate"
+        },
+        {
+          "condition": "An error path is missing",
+          "priority": 2,
+          "next": "F2_no_match"
+        }
+      ],
+      "fallback": "F2_no_match"
+    },
+    {
+      "id": "S5_validate",
+      "type": "validation",
+      "name": "Validate branch coverage",
+      "entry_conditions": [
+        "Workflow draft includes sequence, decisions, and fallback paths"
+      ],
+      "actions": [
+        "Check all transitions, terminal states, unreachable states, missing fallbacks, and loop exits",
+        "Repair issues or report unresolved warnings"
+      ],
+      "validation": [
+        "No blocking validation errors remain"
+      ],
+      "transitions": [
+        {
+          "condition": "Validation passes",
+          "priority": 1,
+          "next": "T1_complete"
+        },
+        {
+          "condition": "Validation finds repairable issues",
+          "priority": 2,
+          "next": "S3_add_decisions"
+        },
+        {
+          "condition": "Validation finds unresolved missing requirements",
+          "priority": 3,
+          "next": "F1_missing_info"
+        }
+      ],
+      "fallback": "F2_no_match"
+    },
+    {
+      "id": "F1_missing_info",
+      "type": "fallback",
+      "name": "Missing essential information",
+      "entry_conditions": [
+        "A required field is missing and cannot be safely assumed"
+      ],
+      "actions": [
+        "Ask one focused question or add a clearly labeled placeholder",
+        "Continue with partial output when safe"
+      ],
+      "transitions": [
+        {
+          "condition": "Missing information is supplied or placeholder is acceptable",
+          "priority": 1,
+          "next": "S2_define_success_path"
+        },
+        {
+          "condition": "Information remains unavailable",
+          "priority": 2,
+          "next": "T2_partial"
+        }
+      ],
+      "fallback": "T2_partial"
+    },
+    {
+      "id": "F2_no_match",
+      "type": "fallback",
+      "name": "No matching branch",
+      "entry_conditions": [
+        "No condition applies or branch logic conflicts"
+      ],
+      "actions": [
+        "Restate what is known",
+        "Use the closest safe default branch",
+        "Ask for the minimum missing detail only if blocked"
+      ],
+      "transitions": [
+        {
+          "condition": "Safe default can be used",
+          "priority": 1,
+          "next": "S5_validate"
+        },
+        {
+          "condition": "No safe default exists",
+          "priority": 2,
+          "next": "T2_partial"
+        }
+      ],
+      "fallback": "T2_partial"
+    },
+    {
+      "id": "F3_safety_redirect",
+      "type": "fallback",
+      "name": "Safety or privacy redirect",
+      "entry_conditions": [
+        "Request is unsafe, privacy-invasive, deceptive, or conflicts with higher-priority rules"
+      ],
+      "actions": [
+        "Do not execute unsafe logic",
+        "Explain the boundary briefly",
+        "Offer a safe alternative workflow when appropriate"
+      ],
+      "transitions": [
+        {
+          "condition": "Safe alternative exists",
+          "priority": 1,
+          "next": "T2_partial"
+        },
+        {
+          "condition": "No safe alternative exists",
+          "priority": 2,
+          "next": "T3_refused"
+        }
+      ],
+      "fallback": "T3_refused"
+    },
+    {
+      "id": "T1_complete",
+      "type": "terminal",
+      "name": "Workflow logic complete",
+      "entry_conditions": [
+        "Validation passes"
+      ],
+      "actions": [
+        "Return final workflow spec"
+      ],
+      "terminal": true
+    },
+    {
+      "id": "T2_partial",
+      "type": "terminal",
+      "name": "Partial workflow delivered",
+      "entry_conditions": [
+        "The workflow can be partially completed with disclosed limits"
+      ],
+      "actions": [
+        "Return partial spec with assumptions, limitations, and next needed input"
+      ],
+      "terminal": true
+    },
+    {
+      "id": "T3_refused",
+      "type": "terminal",
+      "name": "Unsafe workflow refused",
+      "entry_conditions": [
+        "No safe workflow alternative is available"
+      ],
+      "actions": [
+        "Refuse briefly and avoid unsafe operational detail"
+      ],
+      "terminal": true
+    }
+  ],
+  "fallback_coverage": [
+    "missing_information",
+    "ambiguous_intent",
+    "invalid_input",
+    "tool_failure",
+    "file_access_failure",
+    "timeout",
+    "unavailable_data",
+    "policy_or_safety_conflict",
+    "user_interruption",
+    "no_matching_branch",
+    "generic_error",
+    "no matching branch"
+  ],
+  "test_scenarios": [
+    {
+      "scenario": "Clear request with all inputs",
+      "expected_path": [
+        "S1_intake",
+        "S2_define_success_path",
+        "S3_add_decisions",
+        "S4_add_error_paths",
+        "S5_validate",
+        "T1_complete"
+      ]
+    },
+    {
+      "scenario": "Missing core objective",
+      "expected_path": [
+        "S1_intake",
+        "F1_missing_info",
+        "T2_partial"
+      ]
+    },
+    {
+      "scenario": "Unsafe workflow request",
+      "expected_path": [
+        "S1_intake",
+        "F3_safety_redirect",
+        "T3_refused"
+      ]
+    }
+  ]
+}
