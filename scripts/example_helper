@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""Validate a workflow-design-logic JSON workflow definition.
+
+The validator is deterministic and local-only. It checks structural issues that
+commonly break agent workflow specs: missing transitions, bad references,
+missing fallback coverage, unreachable states, and states with no path to a
+terminal outcome.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from collections import defaultdict, deque
+from pathlib import Path
+from typing import Any
+
+FALLBACK_KEYWORDS = {
+    "missing",
+    "ambiguous",
+    "invalid",
+    "tool",
+    "file",
+    "timeout",
+    "unavailable",
+    "safety",
+    "policy",
+    "no_match",
+    "no matching",
+    "failure",
+    "error",
+}
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("Workflow file must contain a JSON object at the top level.")
+    return data
+
+
+def state_edges(state: dict[str, Any]) -> list[str]:
+    edges: list[str] = []
+    for transition in state.get("transitions", []) or []:
+        if isinstance(transition, dict) and transition.get("next"):
+            edges.append(str(transition["next"]))
+    fallback = state.get("fallback")
+    if fallback:
+        edges.append(str(fallback))
+    return edges
+
+
+def has_terminal_transition(state: dict[str, Any]) -> bool:
+    if state.get("terminal") is True or state.get("type") == "terminal":
+        return True
+    for transition in state.get("transitions", []) or []:
+        if isinstance(transition, dict) and transition.get("terminal") is True:
+            return True
+    return False
+
+
+def validate(data: dict[str, Any]) -> dict[str, list[str]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    title = data.get("workflow_title")
+    if not isinstance(title, str) or not title.strip():
+        errors.append("Missing required field: workflow_title")
+
+    states = data.get("states")
+    if not isinstance(states, list) or not states:
+        errors.append("Missing required non-empty list: states")
+        return {"errors": errors, "warnings": warnings}
+
+    state_ids: list[str] = []
+    state_by_id: dict[str, dict[str, Any]] = {}
+    for index, state in enumerate(states):
+        if not isinstance(state, dict):
+            errors.append(f"State at index {index} must be an object")
+            continue
+        state_id = state.get("id")
+        if not isinstance(state_id, str) or not state_id.strip():
+            errors.append(f"State at index {index} is missing string field: id")
+            continue
+        if state_id in state_by_id:
+            errors.append(f"Duplicate state id: {state_id}")
+        state_ids.append(state_id)
+        state_by_id[state_id] = state
+
+    if not state_by_id:
+        return {"errors": errors, "warnings": warnings}
+
+    entry = data.get("entry_state")
+    if not isinstance(entry, str) or not entry.strip():
+        errors.append("Missing required field: entry_state")
+    elif entry not in state_by_id:
+        errors.append(f"entry_state points to unknown state: {entry}")
+
+    terminal_ids = {sid for sid, st in state_by_id.items() if has_terminal_transition(st)}
+    if not terminal_ids:
+        errors.append("Workflow has no terminal state or terminal transition")
+
+    fallback_state_ids = {
+        sid for sid, st in state_by_id.items()
+        if st.get("type") in {"fallback", "error"} or sid.lower().startswith(("f", "e"))
+    }
+    if not fallback_state_ids:
+        warnings.append("No fallback/error states found; add explicit fallback paths")
+
+    graph: dict[str, list[str]] = defaultdict(list)
+    reverse_graph: dict[str, list[str]] = defaultdict(list)
+
+    for sid, state in state_by_id.items():
+        transitions = state.get("transitions", []) or []
+        is_terminal = state.get("terminal") is True or state.get("type") == "terminal"
+
+        if not isinstance(transitions, list):
+            errors.append(f"State {sid} has transitions that are not a list")
+            transitions = []
+
+        if not is_terminal and not transitions and not state.get("fallback"):
+            errors.append(f"Non-terminal state {sid} has no transitions or fallback")
+
+        if not is_terminal and not state.get("fallback"):
+            warnings.append(f"State {sid} has no explicit fallback/default")
+
+        priorities: set[int] = set()
+        for t_index, transition in enumerate(transitions):
+            if not isinstance(transition, dict):
+                errors.append(f"Transition {t_index} in state {sid} must be an object")
+                continue
+            condition = transition.get("condition")
+            if not isinstance(condition, str) or not condition.strip():
+                errors.append(f"Transition {t_index} in state {sid} missing condition")
+            priority = transition.get("priority")
+            if isinstance(priority, int):
+                if priority in priorities:
+                    warnings.append(f"State {sid} repeats transition priority {priority}")
+                priorities.add(priority)
+            next_state = transition.get("next")
+            if next_state:
+                next_state = str(next_state)
+                if next_state not in state_by_id:
+                    errors.append(f"State {sid} transition points to unknown state: {next_state}")
+                else:
+                    graph[sid].append(next_state)
+                    reverse_graph[next_state].append(sid)
+            elif transition.get("terminal") is not True:
+                errors.append(f"Transition {t_index} in state {sid} needs next or terminal=true")
+
+        fallback = state.get("fallback")
+        if fallback:
+            fallback = str(fallback)
+            if fallback not in state_by_id:
+                errors.append(f"State {sid} fallback points to unknown state: {fallback}")
+            else:
+                graph[sid].append(fallback)
+                reverse_graph[fallback].append(sid)
+
+    if isinstance(entry, str) and entry in state_by_id:
+        reachable = set()
+        queue = deque([entry])
+        while queue:
+            current = queue.popleft()
+            if current in reachable:
+                continue
+            reachable.add(current)
+            queue.extend(graph.get(current, []))
+        for sid in sorted(set(state_by_id) - reachable):
+            warnings.append(f"State {sid} is unreachable from entry_state")
+
+    terminal_reachable = set(terminal_ids)
+    queue = deque(terminal_ids)
+    while queue:
+        current = queue.popleft()
+        for prev in reverse_graph.get(current, []):
+            if prev not in terminal_reachable:
+                terminal_reachable.add(prev)
+                queue.append(prev)
+    for sid in sorted(set(state_by_id) - terminal_reachable):
+        warnings.append(f"State {sid} has no path to a terminal outcome")
+
+    coverage = data.get("fallback_coverage", [])
+    coverage_text = " ".join(str(item).lower() for item in coverage)
+    if not coverage_text:
+        warnings.append("Missing fallback_coverage list")
+    else:
+        missing_keywords = sorted(k for k in FALLBACK_KEYWORDS if k not in coverage_text)
+        if missing_keywords:
+            warnings.append("fallback_coverage may be missing: " + ", ".join(missing_keywords))
+
+    tests = data.get("test_scenarios", [])
+    if not isinstance(tests, list) or not tests:
+        warnings.append("No test_scenarios found; add at least primary, missing-info, and error scenarios")
+
+    return {"errors": errors, "warnings": warnings}
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Validate a workflow-design-logic JSON file.")
+    parser.add_argument("json_file", type=Path, help="Path to workflow JSON file")
+    parser.add_argument("--strict", action="store_true", help="Treat warnings as failures")
+    args = parser.parse_args(argv)
+
+    try:
+        data = load_json(args.json_file)
+        result = validate(data)
+    except Exception as exc:
+        print(json.dumps({"errors": [str(exc)], "warnings": []}, indent=2))
+        return 1
+
+    print(json.dumps(result, indent=2))
+    if result["errors"]:
+        return 1
+    if args.strict and result["warnings"]:
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
