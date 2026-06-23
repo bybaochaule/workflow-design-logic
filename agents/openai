@@ -1,1 +1,16 @@
+interface:
+  display_name: "Workflow Design & Logic"
+  short_description: "Designs agent workflow logic with if/then branches, sequences, fallbacks, and error paths."
+  default_prompt: "Design the workflow logic, branching conditions, fallback paths, and error handling for this agent."
 
+policy:
+  allow_implicit_invocation: true
+
+dependencies:
+  tools: []
+  files:
+    - SKILL.md
+    - README.md
+    - references/style-guide.md
+    - assets/workflow-template.json
+    - scripts/example_helper.py
